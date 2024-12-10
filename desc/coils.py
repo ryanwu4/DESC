@@ -2824,6 +2824,77 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
             coords, params, basis, source_grid, transforms, "A", chunk_size=chunk_size
         )
 
+    def compute_transfer_matrix(
+        self,
+        coords,
+        normals,
+        params=None,
+        basis="rpz",
+        source_grid=None,
+        transforms=None,
+    ):
+        """Compute transfer matrix between currents in coils and normal field.
+
+        Returns num_coils x n dim matrix. Symmetries in the coilset are accounted for:
+        each entry in the matrix represents the contribution from a
+        given coil and all symmetric copies of that coil on the given coordinate point.
+
+        Parameters
+        ----------
+        coords : array-like shape(n,3)
+            Nodes to evaluate field at in [R,phi,Z] or [X,Y,Z] coordinates.
+        normals : array-like shape(n,3)
+            Normal vectors at each node in [R,phi,Z] coordinates.
+        params : dict or array-like of dict, optional
+            Parameters to pass to coils, either the same for all coils or one for each.
+        basis : {"rpz", "xyz"}
+            Basis for input coordinates.
+        source_grid : Grid, int or None, optional
+            Grid used to discretize coils. If an integer, uses that many equally spaced
+            points. Should NOT include endpoint at 2pi.
+        transforms : dict of Transform or array-like
+            Transforms for R, Z, lambda, etc. Default is to build from grid.
+
+        Returns
+        -------
+        transfer_matrix : ndarray, shape(num_coils, n)
+            Transfer matrix between currents in coils and normal component of magnetic
+            field at the given coordinates.
+
+        """
+        assert basis.lower() in ["rpz", "xyz"]
+        coords = jnp.atleast_2d(jnp.asarray(coords))
+        if params is None:
+            params = [
+                get_params(["x_s", "x", "s", "ds"], coil, basis=basis) for coil in self
+            ]
+
+        # Change to xyz coords for the call to compute_magnetic_field
+        if basis.lower() == "xyz":
+            coords_xyz = xyz2rpz(coords)
+        else:
+            coords_xyz = coords
+
+        def get_transfer_matrix_one_coil(dummy, i):
+            # Set to unit current for the i-th coil
+            params_one_hot = [dict(par) for par in params]
+            for j, par in enumerate(params_one_hot):
+                par["current"] = jnp.where(i == j, 1, 0)
+
+            B = self.compute_magnetic_field(
+                coords_xyz, params=params_one_hot, basis="rpz", source_grid=source_grid
+            )
+
+            B_normal = jnp.sum(B * normals, axis=-1)  # must be in rpz coordinates
+
+            return 0, B_normal
+
+        _, transfer_matrix = scan(
+            get_transfer_matrix_one_coil, 0, jnp.arange(len(self))
+        )
+
+        return transfer_matrix
+
     @classmethod
     def linspaced_angular(
         cls,
@@ -2978,7 +3049,15 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
         return cls(*coilset, check_intersection=check_intersection)
 
     @classmethod
-    def from_makegrid_coilfile(cls, coil_file, method="cubic", check_intersection=True):
+    def from_makegrid_coilfile(
+        cls,
+        coil_file,
+        method="cubic",
+        check_intersection=True,
+        step=1,
+        NFP=1,
+        sym=False,
+    ):
         """Create a CoilSet of SplineXYZCoils from a MAKEGRID-formatted coil txtfile.
 
         If the MAKEGRID contains more than one coil group (denoted by the number listed
@@ -3005,6 +3084,13 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
               both endpoints
         check_intersection : bool
             whether to check the resulting coilsets for intersecting coils.
+        step: int (optional)
+            n, where every nth coil in the makegrid file is kept in the final CoilSet.
+            Useful for handling coil symmetries.
+        NFP : int (optional)
+            Number of field periods for enforcing field period symmetry.
+        sym : bool (optional)
+            Whether to enforce stellarator symmetry in the output coilset.
 
         """
         coils = []  # list of SplineXYZCoils, ignoring coil groups
@@ -3065,7 +3151,7 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
                     coilnames.append(groupname)
 
         for i, (start, end, coilname) in enumerate(
-            zip(coilinds[0:-1], coilinds[1:], coilnames)
+            zip(coilinds[0:-1:step], coilinds[1::step], coilnames[::step])
         ):
             coords = np.genfromtxt(lines[start + 1 : end])
             coils.append(
@@ -3080,7 +3166,7 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
             )
 
         try:
-            return cls(*coils, check_intersection=check_intersection)
+            return cls(*coils, check_intersection=check_intersection, NFP=NFP, sym=sym)
         except ValueError as e:
             errorif(
                 True,
