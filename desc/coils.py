@@ -1153,6 +1153,66 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
             x = rpz
         return x
 
+    def compute_centers(self, params=None, **kwargs):
+        """Compute coil centers accounting for stellarator symmetry.
+
+        Parameters
+        ----------
+        params : dict or array-like of dict, optional
+            Parameters to pass to coils, either the same for all coils or one for each.
+
+        Returns
+        -------
+        x : ndarray, shape(len(self),3)
+            Coil centers, in [R,phi,Z] or [X,Y,Z] coordinates.
+
+        """
+        basis = kwargs.pop("basis", "xyz")
+        if params is None:
+            params = [get_params("center", coil, basis=basis) for coil in self]
+        data = self.compute(
+            "center", grid=LinearGrid(N=1), params=params, basis=basis, **kwargs
+        )
+        data = tree_leaves(data, is_leaf=lambda x: isinstance(x, dict))
+        x = jnp.dstack([d["center"].T for d in data]).T  # shape=(ncoils,3,3)
+
+        # stellarator symmetry is easiest in [X,Y,Z] coordinates
+        if basis.lower() == "rpz":
+            xyz = rpz2xyz(x)
+        else:
+            xyz = x
+
+        # if stellarator symmetric, add reflected coils from the other half field period
+        if self.sym:
+            normal = jnp.array(
+                [-jnp.sin(jnp.pi / self.NFP), jnp.cos(jnp.pi / self.NFP), 0]
+            )
+            xyz_sym = xyz @ reflection_matrix(normal).T @ reflection_matrix([0, 0, 1]).T
+            xyz = jnp.vstack((xyz, jnp.flipud(xyz_sym)))
+
+        # field period rotation is easiest in [R,phi,Z] coordinates
+        rpz = xyz2rpz(xyz)
+
+        # if field period symmetry, add rotated coils from other field periods
+        if self.NFP > 1:
+            rpz0 = rpz
+            for k in range(1, self.NFP):
+                rpz = jnp.vstack(
+                    (rpz, rpz0 + jnp.array([0, 2 * jnp.pi * k / self.NFP, 0]))
+                )
+
+        # ensure phi in [0, 2pi)
+        rpz = rpz.at[:, :, 1].set(jnp.mod(rpz[:, :, 1], 2 * jnp.pi))
+
+        if basis.lower() == "xyz":
+            x = rpz2xyz(rpz)
+        else:
+            x = rpz
+
+        x = x[:, 0, :]  # just return one center for each coil
+
+        return x
+
     def compute_magnetic_field(
         self, coords, params=None, basis="rpz", source_grid=None, transforms=None
     ):
@@ -1232,13 +1292,21 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
         if basis.lower() == "xyz":
             B = rpz2xyz_vec(B, x=coords[:, 0], y=coords[:, 1])
         return B
-    
+
     def compute_transfer_matrix(
-        self, coords, normals, params=None, basis="rpz", source_grid=None, transforms=None
+        self,
+        coords,
+        normals,
+        params=None,
+        basis="rpz",
+        source_grid=None,
+        transforms=None,
     ):
-        """Compute transfer matrix between currents in coils of coilset and normal component 
-        of magnetic field at the given coordinates. Returns num_coils x n dim matrix. 
-        Symmetries in the coilset are accounted for: each entry in the matrix represents the contribution from a
+        """Compute transfer matrix between currents in coilset and normal field.
+
+        Assumes normal component of magnetic field at the given coordinates.
+        Returns num_coils x n dim matrix. Symmetries in the coilset are accounted for:
+        each entry in the matrix represents the contribution from a
         given coil and all symmetric copies of that coil on the given coordinate point.
 
         Parameters
@@ -1260,15 +1328,15 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
         Returns
         -------
         transfer_matrix : ndarray, shape(num_coils, n)
-            Transfer matrix between currents in coils and normal component of magnetic field
-            at the given coordinates.
+            Transfer matrix between currents in coils and normal component of magnetic
+            field at the given coordinates.
 
         """
         assert basis.lower() in ["rpz", "xyz"]
         coords = jnp.atleast_2d(jnp.asarray(coords))
         if params is None:
             params = [
-            get_params(["x_s", "x", "s", "ds"], coil, basis=basis) for coil in self
+                get_params(["x_s", "x", "s", "ds"], coil, basis=basis) for coil in self
             ]
 
         # Change to xyz coords for the call to compute_magnetic_field
@@ -1287,11 +1355,13 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
                 coords_xyz, params=params_one_hot, basis="rpz", source_grid=source_grid
             )
 
-            B_normal = jnp.sum(B * normals, axis=-1) #must be in rpz coordinates
+            B_normal = jnp.sum(B * normals, axis=-1)  # must be in rpz coordinates
 
             return 0, B_normal
-        
-        _, transfer_matrix = scan(get_transfer_matrix_one_coil, 0, jnp.arange(len(self)))
+
+        _, transfer_matrix = scan(
+            get_transfer_matrix_one_coil, 0, jnp.arange(len(self))
+        )
 
         return transfer_matrix
 
@@ -1430,7 +1500,9 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
         return cls(*coilset)
 
     @classmethod
-    def from_makegrid_coilfile(cls, coil_file, method="cubic", step = 1, NFP = 1, sym = False):
+    def from_makegrid_coilfile(
+        cls, coil_file, method="cubic", step=1, NFP=1, sym=False
+    ):
         """Create a CoilSet of SplineXYZCoils from a MAKEGRID-formatted coil txtfile.
 
         If the MAKEGRID contains more than one coil group (denoted by the number listed
@@ -1456,7 +1528,8 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
             - ``'monotonic-0'``: same as `'monotonic'` but with 0 first derivatives at
               both endpoints
         step: int (optional)
-            n, where every nth coil in the makegrid file is kept in the final CoilSet. Useful for handling coil symmetries.
+            n, where every nth coil in the makegrid file is kept in the final CoilSet.
+            Useful for handling coil symmetries.
         NFP : int (optional)
             Number of field periods for enforcing field period symmetry.
         sym : bool (optional)
@@ -1536,7 +1609,7 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
             )
 
         try:
-            return cls(*coils, NFP = NFP, sym = sym, check_intersection = False)
+            return cls(*coils, NFP=NFP, sym=sym, check_intersection=False)
         except ValueError as e:
             errorif(
                 True,
