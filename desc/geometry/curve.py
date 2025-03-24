@@ -48,6 +48,8 @@ class FourierRZCurve(Curve):
         "_NFP",
     ]
 
+    _static_attrs = ["_R_basis", "_Z_basis"]
+
     def __init__(
         self,
         R_n=10,
@@ -127,8 +129,7 @@ class FourierRZCurve(Curve):
         if (
             ((N is not None) and (N != self.N))
             or ((NFP is not None) and (NFP != self.NFP))
-            or (sym is not None)
-            and (sym != self.sym)
+            or ((sym is not None) and (sym != self.sym))
         ):
             self._NFP = int(NFP if NFP is not None else self.NFP)
             self._sym = bool(sym) if sym is not None else self.sym
@@ -203,13 +204,16 @@ class FourierRZCurve(Curve):
             )
 
     @classmethod
-    def from_input_file(cls, path):
+    def from_input_file(cls, path, **kwargs):
         """Create a axis curve from Fourier coefficients in a DESC or VMEC input file.
 
         Parameters
         ----------
         path : Path-like or str
             Path to DESC or VMEC input file.
+        **kwargs : dict, optional
+            keyword arguments to pass to the constructor of the
+            FourierRZCurve being created.
 
         Returns
         -------
@@ -227,6 +231,7 @@ class FourierRZCurve(Curve):
             inputs["axis"][:, 0].astype(int),
             inputs["NFP"],
             inputs["sym"],
+            **kwargs,
         )
         return curve
 
@@ -340,6 +345,8 @@ class FourierXYZCurve(Curve):
         "_Y_basis",
         "_Z_basis",
     ]
+
+    _static_attrs = ["_X_basis", "_Y_basis", "_Z_basis"]
 
     def __init__(
         self,
@@ -523,7 +530,7 @@ class FourierXYZCurve(Curve):
         if basis == "xyz":
             coords_xyz = coords
         else:
-            coords_xyz = rpz2xyz(coords, phi=coords[:, 1])
+            coords_xyz = rpz2xyz(coords)
         X = coords_xyz[:, 0]
         Y = coords_xyz[:, 1]
         Z = coords_xyz[:, 2]
@@ -591,6 +598,8 @@ class FourierPlanarCurve(Curve):
     """
 
     _io_attrs_ = Curve._io_attrs_ + ["_r_n", "_center", "_normal", "_r_basis", "_basis"]
+
+    _static_attrs = ["_r_basis", "_basis"]
 
     # Reference frame is centered at the origin with normal in the +Z direction.
     # Curve is computed in reference frame, then displaced/rotated to the desired frame.
@@ -820,7 +829,8 @@ class FourierPlanarCurve(Curve):
         coords_rotated = coords_centered @ rotmat  # rotate to X-Y plane
 
         warnif(
-            np.max(np.abs(coords_rotated[:, 2])) > 1e-14,  # check that Z=0 for all points
+            np.max(np.abs(coords_rotated[:, 2]))
+            > 1e-14,  # check that Z=0 for all points
             UserWarning,
             "Curve values are not planar! Using the projection onto a plane.",
         )
@@ -830,8 +840,9 @@ class FourierPlanarCurve(Curve):
         unwrapped_s = np.unwrap(s)
         curve_sign = np.sign(unwrapped_s[-1] - unwrapped_s[0])
 
-        if curve_sign == -1: #original curve was parameterized "backwards" (clockwise) compared to FourierPlanarCurve assumption
-            normal = -normal # flip normal vector direction
+        if curve_sign == -1:  # original curve was parameterized "backwards" (clockwise)
+            # compared to FourierPlanarCurve assumption
+            normal = -normal  # flip normal vector direction
             axis = np.cross(Z_axis, normal)
             angle = np.arccos(np.dot(Z_axis, normal))
 
