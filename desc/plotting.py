@@ -2537,7 +2537,10 @@ def plot_coils(coils, grid=None, fig=None, return_data=False, **kwargs):
                 if not unique and (coilset.NFP > 1 or coilset.sym):
                     # plot all coils for symmetric coil sets
                     coilset = CoilSet.from_symmetry(
-                        coilset, NFP=coilset.NFP, sym=coilset.sym
+                        coilset,
+                        NFP=coilset.NFP,
+                        sym=coilset.sym,
+                        check_intersection=False,
                     )
             return [a for i in coilset for a in flatten_coils(i)]
         else:

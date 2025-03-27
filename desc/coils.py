@@ -1599,7 +1599,7 @@ class CoilSet(OptimizableCollection, _Coil, MutableSequence):
                 [-jnp.sin(jnp.pi / self.NFP), jnp.cos(jnp.pi / self.NFP), 0]
             )
             xyz_sym = xyz @ reflection_matrix(normal).T @ reflection_matrix([0, 0, 1]).T
-            xyz = jnp.vstack((xyz, jnp.flipud(xyz_sym)))
+            xyz = jnp.vstack((xyz, xyz_sym))
 
         # field period rotation is easiest in [R,phi,Z] coordinates
         rpz = xyz2rpz(xyz)
