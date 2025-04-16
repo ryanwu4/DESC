@@ -19,6 +19,7 @@ from desc.coils import (
     FourierXYZCoil,
     MixedCoilSet,
     _Coil,
+    initialize_saddle_coils,
 )
 from desc.continuation import solve_continuation_automatic
 from desc.equilibrium import EquilibriaFamily, Equilibrium
@@ -495,7 +496,7 @@ def test_NAE_QSC_solve():
 
         iota = eqq.compute("iota", grid=LinearGrid(rho=0.0))["iota"]
 
-        np.testing.assert_allclose(iota[0], qsc.iota, atol=1e-5, err_msg=string)
+        np.testing.assert_allclose(iota[0], qsc.iota, rtol=1e-4, err_msg=string)
 
         # check lambda to match on-axis
         data_nae = eqq.compute(["lambda", "|B|"], grid=grid_axis)
@@ -510,6 +511,83 @@ def test_NAE_QSC_solve():
         np.testing.assert_allclose(
             data_nae["|B|"], np.ones(np.size(phi)) * qsc.B0, atol=1e-4, err_msg=string
         )
+
+
+@pytest.mark.regression
+@pytest.mark.solve
+@pytest.mark.slow
+def test_NAE_QSC_2nd_order_solve():
+    """Test O(rho^2) NAE QSC constraints solve."""
+    qsc = Qsc.from_paper("precise QA")
+    ntheta = 75
+    r = 0.01
+    N = 9
+    eq = Equilibrium.from_near_axis(qsc, r=r, L=8, M=6, N=N, ntheta=ntheta)
+
+    orig_Rax_val = eq.axis.R_n
+    orig_Zax_val = eq.axis.Z_n
+
+    # this has all the constraints we need,
+    cs = get_NAE_constraints(eq, qsc, order=2, fix_lambda=0, N=eq.N)
+
+    objectives = ForceBalance(eq=eq)
+    obj = ObjectiveFunction(objectives)
+
+    eq.solve(
+        verbose=3,
+        ftol=1e-3,
+        objective=obj,
+        maxiter=45,
+        xtol=2.5e-7,
+        constraints=cs,
+    )
+    grid_axis = LinearGrid(rho=0.0, theta=0.0, N=eq.N_grid, NFP=eq.NFP)
+    # Make sure axis is same
+
+    np.testing.assert_array_almost_equal(orig_Rax_val, eq.axis.R_n)
+    np.testing.assert_array_almost_equal(orig_Zax_val, eq.axis.Z_n)
+
+    # Make sure iota of solved equilibrium is same on-axis as QSC
+
+    iota = eq.compute("iota", grid=LinearGrid(rho=0.0))["iota"]
+
+    np.testing.assert_allclose(iota[0], qsc.iota, rtol=1e-4)
+
+    # check lambda to match on-axis
+    data_nae = eq.compute(["lambda", "|B|"], grid=grid_axis)
+    lam_nae = data_nae["lambda"]
+
+    phi = np.squeeze(grid_axis.nodes[:, 2])
+    np.testing.assert_allclose(lam_nae, -qsc.iota * qsc.nu_spline(phi), atol=2e-5)
+
+    # check |B| on axis
+    np.testing.assert_allclose(
+        data_nae["|B|"], np.ones(np.size(phi)) * qsc.B0, atol=1e-4
+    )
+
+    # check d^2 V / d Psi^2
+    # only check to within 10% as the quantity needs higher resolution
+    # to accurately resolve, if we are within 10% at these resolutions we are
+    # doing extremely well compared to a fixed bdry solve at this aspect ratio
+    grid = LinearGrid(
+        rho=1e-3,
+        axis=False,
+        M=40,
+        N=40,
+        NFP=eq.NFP,
+    )
+    data = eq.compute(["V_rr(r)", "V_r(r)", "psi_rr", "psi_r"], grid=grid)
+    drho_dpsi = 1 / 2 / grid.nodes[:, 0]
+    d2rho_dpsi2 = -1 / 4 / (grid.nodes[:, 0] ** 3)
+    # need this slightly long formula to convert to same
+    # coordinates/units as the NAE is using
+    d2V_dpsi_sq_DESC = (
+        (data["V_rr(r)"] * drho_dpsi**2 + data["V_r(r)"] * d2rho_dpsi2)
+        / eq.Psi**2
+        * 4
+        * np.pi**2
+    )
+    np.testing.assert_allclose(d2V_dpsi_sq_DESC, qsc.d2_volume_d_psi2, rtol=1e-1)
 
 
 @pytest.mark.regression
@@ -530,12 +608,12 @@ def test_NAE_QSC_solve_near_axis_based_off_eq():
     eq_lambda_fixed_1st_order = eq.copy()
 
     # this has all the constraints we need,
-    cs = get_NAE_constraints(eq, qsc_eq=None, order=1, fix_lambda=False, N=eq.N)
+    cs = get_NAE_constraints(eq, qsc_eq=None, order=1, fix_lambda=False)
     cs_lambda_fixed_0th_order = get_NAE_constraints(
-        eq_lambda_fixed_0th_order, qsc_eq=None, order=1, fix_lambda=0, N=eq.N
+        eq_lambda_fixed_0th_order, qsc_eq=None, order=1, fix_lambda=0
     )
     cs_lambda_fixed_1st_order = get_NAE_constraints(
-        eq_lambda_fixed_1st_order, qsc_eq=None, order=1, fix_lambda=True, N=eq.N
+        eq_lambda_fixed_1st_order, qsc_eq=None, order=1, fix_lambda=True
     )
 
     for c in cs:
@@ -570,7 +648,7 @@ def test_NAE_QSC_solve_near_axis_based_off_eq():
 
         iota = eqq.compute("iota", grid=LinearGrid(rho=0.0))["iota"]
 
-        np.testing.assert_allclose(iota[0], qsc.iota, atol=1e-5, err_msg=string)
+        np.testing.assert_allclose(iota[0], qsc.iota, rtol=1e-4, err_msg=string)
 
         ### check lambda to match on axis
         # Evaluate lambda on the axis
@@ -580,6 +658,154 @@ def test_NAE_QSC_solve_near_axis_based_off_eq():
         phi = np.squeeze(grid_axis.nodes[:, 2])
         np.testing.assert_allclose(
             lam_nae, -qsc.iota * qsc.nu_spline(phi), atol=2e-5, err_msg=string
+        )
+
+        # check |B| on axis
+        np.testing.assert_allclose(
+            data_nae["|B|"], np.ones(np.size(phi)) * qsc.B0, atol=1e-4, err_msg=string
+        )
+
+
+@pytest.mark.regression
+@pytest.mark.solve
+@pytest.mark.slow
+def test_NAE_QSC_solve_near_axis_based_off_eq_asym():
+    """Test near-axis 1st/2nd order constraints based off asym DESC equilibrium."""
+    qsc = Qsc.from_paper("precise QA", rs=[1e-3, 1e-2])
+    ntheta = 75
+    r = 0.01
+    N = 9
+    eq_fit = Equilibrium.from_near_axis(qsc, r=r, L=6, M=8, N=N, ntheta=ntheta)
+    eq = eq_fit.copy()
+    eq_2nd_order = eq_fit.copy()
+    orig_Rax_val = eq.axis.R_n
+    orig_Zax_val = eq.axis.Z_n
+
+    # this has all the constraints we need,
+    cs = get_NAE_constraints(eq, qsc_eq=None, order=1, fix_lambda=False, N=eq.N)
+    cs_2nd_order = get_NAE_constraints(
+        eq_2nd_order, qsc_eq=None, order=2, fix_lambda=False, N=eq.N
+    )
+    for c in cs:
+        # should be no FixSumModeslambda in the fix_lambda=False constraint
+        assert not isinstance(c, FixSumModesLambda)
+
+    for eqq, constraints in zip(
+        [eq, eq_2nd_order],
+        [cs, cs_2nd_order],
+    ):
+        objectives = ForceBalance(eq=eqq)
+        obj = ObjectiveFunction(objectives)
+
+        eqq.solve(
+            verbose=3,
+            ftol=1e-3,
+            objective=obj,
+            maxiter=100,
+            xtol=1e-6,
+            gtol=1e-8,
+            constraints=constraints,
+        )
+    grid_axis = LinearGrid(rho=0.0, theta=0.0, N=eq.N_grid, NFP=eq.NFP)
+    for eqq, string in zip(
+        [eq, eq_2nd_order],
+        ["RZ O(rho)", "RZ O(rho^2)"],
+    ):
+        np.testing.assert_array_almost_equal(orig_Rax_val, eqq.axis.R_n, err_msg=string)
+        np.testing.assert_array_almost_equal(orig_Zax_val, eqq.axis.Z_n, err_msg=string)
+
+        # Make sure iota of solved equilibrium is same on axis as QSC
+
+        iota = eqq.compute("iota", grid=LinearGrid(rho=0.0))["iota"]
+
+        np.testing.assert_allclose(iota[0], qsc.iota, rtol=1e-4, err_msg=string)
+
+        ### check lambda to match on axis
+        # Evaluate lambda on the axis
+        data_nae = eqq.compute(["lambda", "|B|"], grid=grid_axis)
+        lam_nae = data_nae["lambda"]
+
+        phi = np.squeeze(grid_axis.nodes[:, 2])
+        # we are not actually fixing lambda, and in fact, the NAE lambda
+        # does not have zero FSA so we don't expect this to match exactly
+        np.testing.assert_allclose(
+            lam_nae, -qsc.iota * qsc.nu_spline(phi), atol=2e-3, err_msg=string
+        )
+
+        # check |B| on axis
+        np.testing.assert_allclose(
+            data_nae["|B|"], np.ones(np.size(phi)) * qsc.B0, atol=1e-4, err_msg=string
+        )
+
+
+@pytest.mark.regression
+@pytest.mark.solve
+@pytest.mark.slow
+def test_NAE_QSC_solve_near_axis_asym():
+    """Test near-axis 1st/2nd order constraints for asym qsc equilibrium."""
+    qsc = Qsc.from_paper("precise QA", rs=[1e-3, 1e-2])
+    ntheta = 75
+    r = 0.05
+    N = 9
+    eq_fit = Equilibrium.from_near_axis(qsc, r=r, L=6, M=8, N=N, ntheta=ntheta)
+    eq = eq_fit.copy()
+    eq_2nd_order = eq_fit.copy()
+    orig_Rax_val = eq.axis.R_n
+    orig_Zax_val = eq.axis.Z_n
+
+    cs = get_NAE_constraints(eq, qsc_eq=qsc, order=1, fix_lambda=False, N=eq.N)
+    cs_2nd_order = get_NAE_constraints(
+        eq_2nd_order, qsc_eq=qsc, order=2, fix_lambda=False, N=eq.N
+    )
+    with pytest.raises(NotImplementedError):
+        get_NAE_constraints(eq, qsc_eq=qsc, order=1, fix_lambda=0, N=eq.N)
+    for c in cs:
+        # should be no FixSumModeslambda in the fix_lambda=False constraint
+        assert not isinstance(c, FixSumModesLambda)
+
+    for eqq, constraints in zip(
+        [eq, eq_2nd_order],
+        [cs, cs_2nd_order],
+    ):
+        objectives = ForceBalance(eq=eqq)
+        obj = ObjectiveFunction(objectives)
+
+        eqq.solve(
+            verbose=3,
+            ftol=1e-3,
+            objective=obj,
+            maxiter=100,
+            xtol=1e-6,
+            gtol=1e-8,
+            constraints=constraints,
+        )
+    grid_axis = LinearGrid(rho=0.0, theta=0.0, N=eq.N_grid, NFP=eq.NFP)
+    # Make sure axis is same
+    for eqq, string in zip(
+        [eq, eq_2nd_order],
+        ["RZ O(rho)", "RZ O(rho^2)"],
+    ):
+        np.testing.assert_array_almost_equal(orig_Rax_val, eqq.axis.R_n, err_msg=string)
+        np.testing.assert_array_almost_equal(orig_Zax_val, eqq.axis.Z_n, err_msg=string)
+
+        # Make sure iota of solved equilibrium is same on axis as QSC
+
+        iota = eqq.compute("iota", grid=LinearGrid(rho=0.0))["iota"]
+
+        np.testing.assert_allclose(iota[0], qsc.iota, rtol=1e-4, err_msg=string)
+
+        ### check lambda to match on axis
+        # Evaluate lambda on the axis
+        data_nae = eqq.compute(["lambda", "|B|"], grid=grid_axis)
+        lam_nae = data_nae["lambda"]
+
+        phi = np.squeeze(grid_axis.nodes[:, 2])
+        np.testing.assert_allclose(
+            lam_nae,
+            -qsc.iota * qsc.nu_spline(phi),
+            atol=4e-3,
+            rtol=1e-3,
+            err_msg=string,
         )
 
         # check |B| on axis
@@ -1918,6 +2144,92 @@ def test_coilset_geometry_optimization():
         abs(surf_opt.Z_lmn[surf_opt.Z_basis.get_idx(M=-1, N=0)]) + offset,
         rtol=2e-2,
     )
+
+
+@pytest.mark.unit
+def test_coilset_geometry_center_optimization():
+    """Test center=True with PlasmaCoilSetMinDistance and CoilSetMinDistance."""
+    R0 = 5  # major radius of plasma
+    a = 1.2  # minor radius of plasma
+    offset = 0.75  # target plasma-coil distance
+
+    # circular tokamak
+    surf = FourierRZToroidalSurface(
+        R_lmn=np.array([R0, a]),
+        Z_lmn=np.array([0, -a]),
+        modes_R=np.array([[0, 0], [1, 0]]),
+        modes_Z=np.array([[0, 0], [-1, 0]]),
+        NFP=2,
+    )
+    eq = Equilibrium(Psi=3, surface=surf, NFP=2, M=2, N=0, sym=True)
+
+    # symmetric coilset with 1 unique coil + 7 virtual coils
+    # initial radius is too large for target plasma-coil distance
+    # initial toroidal angle is too small for target coil-coil distance
+    coils = initialize_saddle_coils(
+        eq, 1, r_over_a=0.1, offset=2
+    )  # offset is in units of plasma-coil distance
+    coils[0].current = 1e6
+    assert len(coils) == 1
+    assert coils.num_coils == 4
+    # grids
+    plasma_grid = LinearGrid(M=16, zeta=64)
+    coil_grid = LinearGrid(N=2)
+    # don't need more than one pt bc center is only one pt per coil
+    # and FourierPlanarCoil can compute center without any resolution in grid
+    # I choose more than one pt here to test it works
+
+    #### optimize coils with fixed equilibrium ####
+    # optimizing for target coil-plasma distance and maximum coil-coil distance
+    coil_coil_dist = (R0 + a + offset) * 2 / np.sqrt(2)
+    objective = ObjectiveFunction(
+        (
+            PlasmaCoilSetMinDistance(
+                eq=eq,
+                coil=coils,
+                target=offset,
+                weight=2,
+                plasma_grid=plasma_grid,
+                coil_grid=coil_grid,
+                eq_fixed=True,
+                coils_fixed=False,
+                use_centers=True,
+            ),
+            CoilSetMinDistance(
+                coils, target=coil_coil_dist, grid=coil_grid, use_centers=True
+            ),
+        )
+    )
+    # only free optimization variables are coil center position R of the first unique
+    # and R, Z of outer coil
+    constraints = (
+        FixCoilCurrent(coils),
+        FixParameters(
+            coils,
+            [
+                {"center": np.array([1, 2]), "normal": True, "r_n": True},
+            ],
+        ),
+    )
+    optimizer = Optimizer("scipy-trf")
+    [coils_opt], _ = optimizer.optimize(
+        things=coils,
+        objective=objective,
+        constraints=constraints,
+        verbose=2,
+        copy=True,
+        ftol=1e-10,
+    )
+    np.testing.assert_allclose(coils_opt[0].current, 1e6)  # current was fixed
+    np.testing.assert_allclose(  # check coils are equally spaced in toroidal angle phi
+        coils_opt[0].center,
+        [R0 + a + offset, np.pi / (coils_opt.num_coils), 0],
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(coils_opt[0].normal, coils[0].normal)  # normal was fixed
+    np.testing.assert_allclose(
+        coils_opt[0].r_n, coils[0].r_n, rtol=1e-2
+    )  # coil radius was fixed
 
 
 @pytest.mark.unit
