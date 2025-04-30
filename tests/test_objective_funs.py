@@ -1258,7 +1258,7 @@ class TestObjectiveFunction:
         eq = load("./tests/inputs/vacuum_circular_tokamak.h5")
         obj = QuadraticFlux(eq, t_field)
         obj.build(verbose=2)
-        f = obj.compute(field_params=t_field.params_dict)
+        f = obj.compute(t_field.params_dict)
         np.testing.assert_allclose(f, 0, rtol=1e-14, atol=1e-14)
 
         # test non-axisymmetric surface
@@ -1303,7 +1303,7 @@ class TestObjectiveFunction:
         obj = QuadraticFlux(eq, t_field, vacuum=True, eval_grid=eval_grid)
         Bnorm = t_field.compute_Bnormal(eq.surface, eval_grid=eval_grid)[0]
         obj.build()
-        f = obj.compute(field_params=t_field.params_dict)
+        f = obj.compute(t_field.params_dict)
         dA = eq.compute("|e_theta x e_zeta|", grid=eval_grid)["|e_theta x e_zeta|"]
         # check that they're the same since we set B_plasma = 0
         np.testing.assert_allclose(f, Bnorm * np.sqrt(dA), atol=1e-14)
