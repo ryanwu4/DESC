@@ -10,6 +10,7 @@ Optionally can also contract the profiles of the original ``Equilibrium`` so tha
 - Adds the classes ``FourierXYCurve`` and ``FourierXYCoil`` to represent planar curves/coils with Fourier series for X and Y instead of the radius.
 - `ProximalProjection` now has distinct `blocked` and `batched` parts.
 - `ProximalProjection` uses jvp's for the derivative of the `ForceBalance` part instead of manually taking the matrix products. This reduces the jacobian time on CPU.
+- `result` dictionary returned by `Optimizer.optimize` or `eq.optimize` now includes sub-dictionary `"Objective values"` containing summary info of objective values before and after optimization, the same info that is printed to the terminal by default.
 - Adds error for incorrect grids in ``desc.objectives.BootstrapRedlConsistency`` and when computing ``current Redl`` and ``<J*B> Redl`` compute quantities
 - Allows Redl compute quantities to use SplineProfile
 - Updates Redl bootstrap current consistency tutorial to include a ``SplineProfile`` optimization

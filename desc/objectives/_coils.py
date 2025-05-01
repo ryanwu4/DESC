@@ -2363,6 +2363,7 @@ class SurfaceCurrentRegularization(_Objective):
         normalize_target=True,
         loss_function=None,
         deriv_mode="auto",
+        jac_chunk_size=None,
         regularization="K",
         source_grid=None,
         name="surface-current-regularization",
@@ -2404,6 +2405,7 @@ class SurfaceCurrentRegularization(_Objective):
             normalize_target=normalize_target,
             loss_function=loss_function,
             deriv_mode=deriv_mode,
+            jac_chunk_size=jac_chunk_size,
             name=name,
         )
 
