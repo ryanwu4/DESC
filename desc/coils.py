@@ -1586,6 +1586,7 @@ def _check_type(coil0, coil):
         FourierXYZCoil: ["X_basis", "Y_basis", "Z_basis"],
         SplineXYZCoil: ["method", "N", "knots"],
         FourierPlanarFiniteBuildCoil: ["r_basis"],
+        FourierXYFiniteBuildCoil: ["X_basis", "Y_basis"],
     }
 
     for attr in attrs[coil0.__class__]:
@@ -2361,6 +2362,155 @@ class FourierPlanarFiniteBuildCoil(AbstractFiniteBuildCoil, FourierPlanarCoil):
             normal=normal,
             r_n=r_n,
             modes=r_basis.modes[:, 2],
+            basis=basis,
+            name=name,
+        )
+
+
+class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
+    """Coil that lies in a plane, with a finite cross section.
+
+    Refer to FourierXYCoil for a description of the parameterization for the
+    planar coil centerline. In the case of rectangular cross sections, the coil
+    cross section is assumed to remain aligned with respect to the coil plane.
+    The first dimension of the rectangular cross section is within the coil plane,
+    and the second dimension is in the coil plane normal direction.
+    No twist angle is assumed for this coil.
+
+    Parameters
+    ----------
+    current : float
+        Current through the coil, in Amperes.
+    center : array-like, shape(3,)
+        Coordinates of center of curve, in system determined by basis.
+    normal : array-like, shape(3,)
+        Components of normal vector to planar surface, in system determined by basis.
+    X_n : array-like
+        Fourier coefficients of the X coordinate in the plane.
+    Y_n : array-like
+        Fourier coefficients of the Y coordinate in the plane.
+    modes : array-like
+        Mode numbers associated with X_n and Y_n. The n=0 mode will be ignored.
+    basis : {'xyz', 'rpz'}
+        Coordinate system for center and normal vectors. Default = 'xyz'.
+    cross_section_dims : array-like
+        Dimensions of the coil cross section, with 1 or 2 dimensions depending on
+        the cross section shape (circular or rectangular).
+    name : str
+        Name for this coil.
+    """
+
+    _io_attrs_ = AbstractFiniteBuildCoil._io_attrs_ + FourierXYCurve._io_attrs_
+
+    def __init__(
+        self,
+        current=1,
+        center=[10, 0, 0],
+        normal=[0, 1, 0],
+        X_n=[0, 2],
+        Y_n=[2, 0],
+        modes=None,
+        basis="xyz",
+        cross_section_dims=[0.1, 0.1],
+        name="",
+    ):
+        alpha_n = [0, 0, 0]  # by default, this coil has no twist
+        alpha_modes = None
+        super().__init__(
+            cross_section_dims,
+            alpha_n,
+            alpha_modes,
+            current,
+            center,
+            normal,
+            X_n,
+            Y_n,
+            modes,
+            basis,
+            name,
+        )
+
+    @classmethod
+    def from_FourierXYCoil(
+        cls,
+        coil,
+        cross_section_dims=[0.1, 0.1],
+        name="",
+    ):
+        """Given FourierXYCoil, create a FourierXYFiniteBuildCoil.
+
+        Preserves all coil properties, but adds cross sectional dimensions.
+
+        Parameters
+        ----------
+        coil : FourierXYCoil
+            Coil to copy properties from.
+        cross_section_dims : array-like
+            Dimensions of the coil cross section, with 1 or 2 dimensions depending on
+            the cross section shape (circular or rectangular).
+        name : str
+            Name for this coil.
+
+
+        Returns
+        -------
+        coil : FourierXYFiniteBuildCoil
+            New representation of the coil with finite build dimensions.
+
+        """
+        current = coil.current
+        center = coil.center
+        normal = coil.normal
+        X_n = coil.X_n
+        Y_n = coil.Y_n
+        X_basis = coil.X_basis
+        basis = coil.basis
+
+        return FourierXYFiniteBuildCoil(
+            current=current,
+            center=center,
+            normal=normal,
+            X_n=X_n,
+            Y_n=Y_n,
+            modes=X_basis.modes[:, 2],
+            basis=basis,
+            cross_section_dims=cross_section_dims,
+            name=name,
+        )
+
+    def to_FourierXY(self, name="", **kwargs):
+        """Convert FourierXYFiniteBuildCoil to FourierXYCoil representation.
+
+        Overrides the base _Coil class method, preserving spectral resolution and mode
+        numbers from the finite build version.
+
+        Parameters
+        ----------
+        name : str
+            Name for this coil.
+
+        Returns
+        -------
+        coil : FourierXYCoil
+            New representation of the coil parameterized by Fourier series for X
+            and Y, without the finite build cross section.
+
+        """
+        current = self.current
+        center = self.center
+        normal = self.normal
+        X_n = self.X_n
+        Y_n = self.Y_n
+        X_basis = self.X_basis
+        basis = self.basis
+
+        return FourierXYCoil(
+            current=current,
+            center=center,
+            normal=normal,
+            X_n=X_n,
+            Y_n=Y_n,
+            modes=X_basis.modes[:, 2],
             basis=basis,
             name=name,
         )
