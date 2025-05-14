@@ -77,7 +77,7 @@ from desc.objectives import (
     ObjectiveFromUser,
     ObjectiveFunction,
     Omnigenity,
-    PlasmaCoilSetMaxDistance,
+    PlasmaCoilSetDistanceBound,
     PlasmaCoilSetMinDistance,
     PlasmaVesselDistance,
     Pressure,
@@ -1253,25 +1253,27 @@ class TestObjectiveFunction:
         )
 
     @pytest.mark.unit
-    def test_plasma_coil_max_distance(self):
-        """Tests maximum distance between plasma and a coilset."""
+    def test_plasma_coil_distance_bound(self):
+        """Tests distance bound between plasma and a coilset."""
 
         def test(
             eq,
             coils,
+            mindist,
             maxdist,
             plasma_grid=None,
             coil_grid=None,
             eq_fixed=False,
             coils_fixed=False,
         ):
-            obj = PlasmaCoilSetMaxDistance(
+            obj = PlasmaCoilSetDistanceBound(
                 eq=eq,
                 coil=coils,
                 plasma_grid=plasma_grid,
                 coil_grid=coil_grid,
                 eq_fixed=eq_fixed,
                 coils_fixed=coils_fixed,
+                mode="max",
             )
             obj.build()
             if eq_fixed:
@@ -1282,15 +1284,16 @@ class TestObjectiveFunction:
                 f = obj.compute(params_1=eq.params_dict, params_2=coils.params_dict)
             assert f.size == coils.num_coils
             np.testing.assert_allclose(f, maxdist, rtol=5e-2, atol=1e-3)
-            obj2 = PlasmaCoilSetMaxDistance(
+            obj2 = PlasmaCoilSetDistanceBound(
                 eq=eq,
                 coil=coils,
                 plasma_grid=plasma_grid,
                 coil_grid=coil_grid,
                 eq_fixed=eq_fixed,
                 coils_fixed=coils_fixed,
-                use_softmax=True,
-                softmax_alpha=100,
+                use_softmin=True,
+                softmin_alpha=100,
+                mode="max",
             )
             obj2.build()
             if eq_fixed:
@@ -1302,13 +1305,63 @@ class TestObjectiveFunction:
             assert f.size == coils.num_coils
             np.testing.assert_allclose(f, maxdist, rtol=5e-2, atol=1e-3)
 
+            obj3 = PlasmaCoilSetDistanceBound(
+                eq=eq,
+                coil=coils,
+                plasma_grid=plasma_grid,
+                coil_grid=coil_grid,
+                eq_fixed=eq_fixed,
+                coils_fixed=coils_fixed,
+                mode="bound",
+            )
+            obj3.build()
+            if eq_fixed:
+                f = obj3.compute(params_1=coils.params_dict)
+            elif coils_fixed:
+                f = obj3.compute(params_1=eq.params_dict)
+            else:
+                f = obj3.compute(params_1=eq.params_dict, params_2=coils.params_dict)
+            assert f.size == coils.num_coils * 2
+            f = f.flatten()
+            f_min = f[0::2]
+            f_max = f[1::2]
+            np.testing.assert_allclose(f_min, mindist, rtol=5e-2, atol=1e-3)
+            np.testing.assert_allclose(f_max, maxdist, rtol=5e-2, atol=1e-3)
+
+            obj4 = PlasmaCoilSetDistanceBound(
+                eq=eq,
+                coil=coils,
+                plasma_grid=plasma_grid,
+                coil_grid=coil_grid,
+                eq_fixed=eq_fixed,
+                coils_fixed=coils_fixed,
+                use_softmin=True,
+                softmin_alpha=100,
+                mode="bound",
+            )
+            obj4.build()
+            if eq_fixed:
+                f = obj4.compute(params_1=coils.params_dict)
+            elif coils_fixed:
+                f = obj4.compute(params_1=eq.params_dict)
+            else:
+                f = obj4.compute(params_1=eq.params_dict, params_2=coils.params_dict)
+            assert f.size == coils.num_coils * 2
+            f = f.flatten()
+            f_min = f[0::2]
+            f_max = f[1::2]
+            np.testing.assert_allclose(f_min, mindist, rtol=5e-2, atol=1e-3)
+            np.testing.assert_allclose(f_max, maxdist, rtol=5e-2, atol=1e-3)
+
         plasma_grid = LinearGrid(M=8, zeta=16)
-        coil_grid = LinearGrid(N=8)
+        coil_grid = LinearGrid(N=32)
 
         # planar toroidal coils without symmetry, around fixed circular tokamak
+        # shifted over slightly to get an interesting max distance
         R0 = 3
         a = 1
         offset = 0.5
+        shift = 0.3
         surf = FourierRZToroidalSurface(
             R_lmn=np.array([R0, a]),
             Z_lmn=np.array([0, -a]),
@@ -1316,12 +1369,15 @@ class TestObjectiveFunction:
             modes_Z=np.array([[0, 0], [-1, 0]]),
         )
         eq = Equilibrium(surface=surf, NFP=1, M=2, N=0, sym=True)
-        coil = FourierPlanarCoil(center=[R0, 0, 0], normal=[0, 1, 0], r_n=[a + offset])
+        coil = FourierPlanarCoil(
+            center=[R0 + shift, 0, 0], normal=[0, 1, 0], r_n=[a + offset]
+        )
         coils = CoilSet.linspaced_angular(coil, n=8, check_intersection=False)
         test(
             eq,
             coils,
-            offset,
+            offset - shift,
+            offset + shift,
             plasma_grid=plasma_grid,
             coil_grid=coil_grid,
             eq_fixed=True,
@@ -1329,7 +1385,8 @@ class TestObjectiveFunction:
         test(
             eq.surface,
             coils,
-            offset,
+            offset - shift,
+            offset + shift,
             plasma_grid=plasma_grid,
             coil_grid=coil_grid,
             eq_fixed=True,
@@ -1339,6 +1396,7 @@ class TestObjectiveFunction:
         R0 = 5
         a = 1.5
         offset = 0.75
+        shift = 0.5
         surf = FourierRZToroidalSurface(
             R_lmn=np.array([R0, a]),
             Z_lmn=np.array([0, -a]),
@@ -1346,7 +1404,9 @@ class TestObjectiveFunction:
             modes_Z=np.array([[0, 0], [-1, 0]]),
         )
         eq = Equilibrium(surface=surf, NFP=1, M=2, N=0, sym=True)
-        coil = FourierPlanarCoil(center=[R0, 0, 0], normal=[0, 1, 0], r_n=[a + offset])
+        coil = FourierPlanarCoil(
+            center=[R0 + shift, 0, 0], normal=[0, 1, 0], r_n=[a + offset]
+        )
         coils = CoilSet.linspaced_angular(
             coil, angle=np.pi / 2, n=5, endpoint=True, check_intersection=False
         )
@@ -1354,7 +1414,8 @@ class TestObjectiveFunction:
         test(
             eq,
             coils,
-            offset,
+            offset - shift,
+            offset + shift,
             plasma_grid=plasma_grid,
             coil_grid=coil_grid,
             eq_fixed=False,
@@ -1362,7 +1423,8 @@ class TestObjectiveFunction:
         test(
             eq.surface,
             coils,
-            offset,
+            offset - shift,
+            offset + shift,
             plasma_grid=plasma_grid,
             coil_grid=coil_grid,
             eq_fixed=False,
@@ -1372,6 +1434,7 @@ class TestObjectiveFunction:
         R0 = 5
         a = 1.5
         offset = 0.75
+        shift = 0.5
         surf = FourierRZToroidalSurface(
             R_lmn=np.array([R0, a]),
             Z_lmn=np.array([0, -a]),
@@ -1379,7 +1442,9 @@ class TestObjectiveFunction:
             modes_Z=np.array([[0, 0], [-1, 0]]),
         )
         eq = Equilibrium(surface=surf, NFP=1, M=2, N=0, sym=True)
-        coil = FourierPlanarCoil(center=[R0, 0, 0], normal=[0, 1, 0], r_n=[a + offset])
+        coil = FourierPlanarCoil(
+            center=[R0 + shift, 0, 0], normal=[0, 1, 0], r_n=[a + offset]
+        )
         coils = CoilSet.linspaced_angular(
             coil, angle=np.pi / 2, n=5, endpoint=True, check_intersection=False
         )
@@ -1387,7 +1452,8 @@ class TestObjectiveFunction:
         test(
             eq,
             coils,
-            offset,
+            offset - shift,
+            offset + shift,
             plasma_grid=plasma_grid,
             coil_grid=coil_grid,
             eq_fixed=False,
@@ -3153,6 +3219,7 @@ class TestComputeScalarResolution:
         HeatingPowerISS04,
         LinkingCurrentConsistency,
         Omnigenity,
+        PlasmaCoilSetDistanceBound,
         PlasmaCoilSetMinDistance,
         PlasmaVesselDistance,
         QuadraticFlux,
@@ -3641,6 +3708,7 @@ class TestObjectiveNaNGrad:
         HeatingPowerISS04,
         LinkingCurrentConsistency,
         Omnigenity,
+        PlasmaCoilSetDistanceBound,
         PlasmaCoilSetMinDistance,
         PlasmaVesselDistance,
         QuadraticFlux,

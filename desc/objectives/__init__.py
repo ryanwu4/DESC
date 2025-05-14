@@ -12,7 +12,7 @@ from ._coils import (
     CoilSetMinDistance,
     CoilTorsion,
     LinkingCurrentConsistency,
-    PlasmaCoilSetMaxDistance,
+    PlasmaCoilSetDistanceBound,
     PlasmaCoilSetMinDistance,
     QuadraticFlux,
     SurfaceCurrentRegularization,
