@@ -720,6 +720,11 @@ class CoilSetMinDistance(_Objective):
     ----------
     coil : CoilSet
         Coil(s) that are to be optimized.
+    normal_project_dist : float, optional
+        Distance within which the coil points are projected onto the coil
+        plane. Intersections are only checked for projected points, if projection is
+        enabled. Projection is only available for planar coilsets.
+        Defaults to None, which means no projection is done.
     grid : Grid, list, optional
         Collocation grid used to discretize each coil. Defaults to the default grid
         for the given coil-type, see ``coils.py`` and ``curve.py`` for more details.
@@ -761,6 +766,7 @@ class CoilSetMinDistance(_Objective):
         normalize_target=True,
         loss_function=None,
         deriv_mode="auto",
+        normal_project_dist=None,
         grid=None,
         name="coil-coil minimum distance",
         jac_chunk_size=None,
@@ -781,6 +787,19 @@ class CoilSetMinDistance(_Objective):
             ValueError,
             "coil must be of type CoilSet, not an individual Coil",
         )
+
+        self._normal_project_dist = None
+        if normal_project_dist is not None:
+            try:
+                _ = coil[0].normal
+                _ = coil[0].center
+            except AttributeError:
+                raise ValueError(
+                    "normal_project_dist can only be used with planar coils, "
+                    "which have a normal vector and center point."
+                )
+            self._normal_project_dist = normal_project_dist
+
         super().__init__(
             things=coil,
             target=target,
@@ -808,7 +827,7 @@ class CoilSetMinDistance(_Objective):
         coilset = self.things[0]
         grid = self._grid or None
 
-        self._dim_f = coilset.num_coils
+        self._dim_f = len(coilset)
         self._constants = {"coilset": coilset, "grid": grid, "quad_weights": 1.0}
 
         if self._normalize:
@@ -841,6 +860,13 @@ class CoilSetMinDistance(_Objective):
             params=params, grid=constants["grid"], basis="xyz"
         )
 
+        if self._normal_project_dist is not None:
+            data = constants["coilset"].compute(
+                ["normal", "center"], params=params, grid=LinearGrid(N=0), basis="xyz"
+            )
+            coil_normals = jnp.stack([d["normal"][0] for d in data], axis=0)
+            coil_centers = jnp.stack([d["center"][0] for d in data], axis=0)
+
         def body(k):
             # pts shape (ncoils, num_nodes, 3)
             # dist btwn all pts; shape(ncoils,num_nodes,num_nodes)
@@ -848,6 +874,27 @@ class CoilSetMinDistance(_Objective):
             # to the nth point on the ith coil
             coil_pts = pts[k]
             other_pts = jnp.delete(pts, k, axis=0, assume_unique_indices=True)
+
+            if self._normal_project_dist is not None:
+                # project coil points onto the plane defined by the coil normal
+                # and the distance to project is given by self._normal_project_dist
+                normal = coil_normals[k]
+                center = coil_centers[k]
+
+                rel_pts = other_pts - center[None, None, :]
+
+                # find normal component of the points
+                normal_component = jnp.sum(rel_pts * normal[None, None, :], axis=-1)
+                mask = jnp.abs(normal_component) < self._normal_project_dist
+
+                # project points onto the plane
+                proj_pts = (
+                    other_pts - normal[None, None, :] * normal_component[:, :, None]
+                )
+
+                # only project points that are within the projection distance
+                other_pts = jnp.where(mask[:, :, None], proj_pts, other_pts)
+
             dist = safenorm(coil_pts[None, :, None] - other_pts[:, None], axis=-1)
             if self._use_softmin:
                 return softmin(dist, self._softmin_alpha)

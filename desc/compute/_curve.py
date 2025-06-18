@@ -181,6 +181,41 @@ def _center_PlanarCurve(params, transforms, profiles, data, **kwargs):
 
 
 @register_compute_fun(
+    name="normal",
+    label="\\mathbf{n}",
+    units="",
+    units_long="",
+    description="Unit normal of the curve",
+    dim=3,
+    params=["center", "normal", "rotmat", "shift"],
+    transforms={},
+    profiles=[],
+    coordinates="s",
+    data=["x", "center"],
+    parameterization=[
+        "desc.geometry.curve.FourierPlanarCurve",
+        "desc.geometry.curve.FourierXYCurve",
+    ],
+    basis_in="{'rpz', 'xyz'}: Basis for input params vectors, Default 'xyz'",
+)
+def _normal_PlanarCurve(params, transforms, profiles, data, **kwargs):
+    if kwargs.get("basis_in", "xyz").lower() == "rpz":
+        normal = rpz2xyz_vec(params["normal"], phi=params["center"][1])
+    else:
+        normal = params["normal"]
+    # rotate normal
+    normal = jnp.matmul(normal, params["rotmat"].reshape((3, 3)).T)
+    # unit normal
+    normal = safenormalize(normal)
+
+    # convert back to rpz, using the rotated center as well
+    data["normal"] = xyz2rpz_vec(normal, phi=data["center"][0, 1]) * jnp.ones_like(
+        data["x"]
+    )
+    return data
+
+
+@register_compute_fun(
     name="x",
     label="\\mathbf{x}",
     units="m",
