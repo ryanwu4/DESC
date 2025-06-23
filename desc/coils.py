@@ -2319,8 +2319,10 @@ class FourierPlanarFiniteBuildCoil(AbstractFiniteBuildCoil, FourierPlanarCoil):
         r_n = coil.r_n
         r_basis = coil.r_basis
         basis = coil.basis
+        rotmat = coil.rotmat
+        shift = coil.shift
 
-        return FourierPlanarFiniteBuildCoil(
+        coil_fb = FourierPlanarFiniteBuildCoil(
             current=current,
             center=center,
             normal=normal,
@@ -2330,6 +2332,11 @@ class FourierPlanarFiniteBuildCoil(AbstractFiniteBuildCoil, FourierPlanarCoil):
             cross_section_dims=cross_section_dims,
             name=name,
         )
+
+        coil_fb.shift = shift
+        coil_fb.rotmat = rotmat
+
+        return coil_fb
 
     def to_FourierPlanar(self, name="", **kwargs):
         """Convert FourierPlanarFiniteBuildCoil to FourierPlanarCoil representation.
@@ -2355,8 +2362,10 @@ class FourierPlanarFiniteBuildCoil(AbstractFiniteBuildCoil, FourierPlanarCoil):
         r_n = self.r_n
         r_basis = self.r_basis
         basis = self.basis
+        rotmat = self.rotmat
+        shift = self.shift
 
-        return FourierPlanarCoil(
+        coil_filamentary = FourierPlanarCoil(
             current=current,
             center=center,
             normal=normal,
@@ -2365,6 +2374,11 @@ class FourierPlanarFiniteBuildCoil(AbstractFiniteBuildCoil, FourierPlanarCoil):
             basis=basis,
             name=name,
         )
+
+        coil_filamentary.rotmat = rotmat
+        coil_filamentary.shift = shift
+
+        return coil_filamentary
 
 
 class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
@@ -2465,8 +2479,10 @@ class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
         Y_n = coil.Y_n
         X_basis = coil.X_basis
         basis = coil.basis
+        rotmat = coil.rotmat
+        shift = coil.shift
 
-        return FourierXYFiniteBuildCoil(
+        coil_fb = FourierXYFiniteBuildCoil(
             current=current,
             center=center,
             normal=normal,
@@ -2477,6 +2493,11 @@ class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
             cross_section_dims=cross_section_dims,
             name=name,
         )
+
+        coil_fb.rotmat = rotmat
+        coil_fb.shift = shift
+
+        return coil_fb
 
     def to_FourierXY(self, name="", **kwargs):
         """Convert FourierXYFiniteBuildCoil to FourierXYCoil representation.
@@ -2503,8 +2524,10 @@ class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
         Y_n = self.Y_n
         X_basis = self.X_basis
         basis = self.basis
+        rotmat = self.rotmat
+        shift = self.shift
 
-        return FourierXYCoil(
+        coil_filamentary = FourierXYCoil(
             current=current,
             center=center,
             normal=normal,
@@ -2514,6 +2537,11 @@ class FourierXYFiniteBuildCoil(AbstractFiniteBuildCoil, FourierXYCoil):
             basis=basis,
             name=name,
         )
+
+        coil_filamentary.rotmat = rotmat
+        coil_filamentary.shift = shift
+
+        return coil_filamentary
 
 
 class CoilSet(OptimizableCollection, _Coil, MutableSequence):
