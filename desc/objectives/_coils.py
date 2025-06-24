@@ -1157,6 +1157,165 @@ class CoilSetMaxB(_Objective):
         return max_field_per_coil
 
 
+class MinCoilSetPointDistance(_Objective):
+    """Target the distance between the plasma and a given set of points.
+
+    Will yield one value per coil in the coilset, which is the minimum distance from
+    that coil to a point in the given set.
+
+
+    Parameters
+    ----------
+    coil : CoilSet
+        Coil(s) that are to be optimized.
+    points: ndarray, shape (N, 3)
+        Set of points against which distances will be measured form the coilset.
+    coil_grid : Grid, list, optional
+        Collocation grid containing the nodes to evaluate coilset geometry at.
+        Defaults to the default grid for the given coil-type, see ``coils.py``
+        and ``curve.py`` for more details.
+        If a list, must have the same structure as coils.
+    use_softmin: bool, optional
+        Use softmin (softmax) or hard min (max). Softmin is a smooth approximation to
+        the actual minimum distance that may give smoother gradients, at the expense of
+        being slightly more expensive and only an approximate extremum.
+    softmin_alpha: float, optional
+        Parameter used for softmin. The larger ``softmin_alpha``, the closer the
+        softmin (softmax) approximates the hardmin (hardmax). softmin -> hardmin as
+        ``softmin_alpha`` -> infinity.
+    dist_chunk_size : int > 0, optional
+        When computing distances, how many coils to consider at once. Default is all
+        coils, which is generally the fastest but requires the most memory. If there are
+        a large number of coils, or if the resolution is very high, setting this to a
+        small value will reduce peak memory usage at the cost of slightly increased
+        runtime.
+
+    """
+
+    __doc__ = __doc__.rstrip() + collect_docs(
+        target_default="``bounds=(1,np.inf)``.",
+        bounds_default="``bounds=(1,np.inf)``.",
+        coil=True,
+    )
+
+    _scalar = False
+    _units = "(m)"
+    _print_value_fmt = "Minimum coil-points distance: "
+
+    def __init__(
+        self,
+        coil,
+        points,
+        target=None,
+        bounds=None,
+        weight=1,
+        normalize=True,
+        normalize_target=True,
+        loss_function=None,
+        deriv_mode="auto",
+        coil_grid=None,
+        name="coil-points distance",
+        jac_chunk_size=None,
+        use_softmin=False,
+        softmin_alpha=1.0,
+        dist_chunk_size=None,
+    ):
+        if target is None and bounds is None:
+            bounds = (1, np.inf)
+
+        points = jnp.atleast_2d(points)
+
+        errorif(points.shape[1] != 3, ValueError, "Points must have shape (N, 3)")
+
+        self._points = points
+        self._coil_grid = coil_grid
+        self._use_softmin = use_softmin
+        self._softmin_alpha = softmin_alpha
+        self._dist_chunk_size = dist_chunk_size
+
+        super().__init__(
+            things=coil,
+            target=target,
+            bounds=bounds,
+            weight=weight,
+            normalize=normalize,
+            normalize_target=normalize_target,
+            loss_function=loss_function,
+            deriv_mode=deriv_mode,
+            name=name,
+            jac_chunk_size=jac_chunk_size,
+        )
+
+    def build(self, use_jit=True, verbose=1):
+        """Build constant arrays.
+
+        Parameters
+        ----------
+        use_jit : bool, optional
+            Whether to just-in-time compile the objective and derivatives.
+        verbose : int, optional
+            Level of output.
+
+        """
+        coilset = self.things[0]
+        coil_grid = self._coil_grid or None
+        points = jnp.array(self._points, dtype=jnp.float64)
+        self._dim_f = coilset.num_coils
+        self._constants = {
+            "coil": coilset,
+            "coil_grid": coil_grid,
+            "points": points,
+            "quad_weights": 1.0,
+        }
+
+        if self._normalize:
+            coils = tree_leaves(coilset, is_leaf=lambda x: not hasattr(x, "__len__"))
+            scales = [compute_scaling_factors(coil)["a"] for coil in coils]
+            self._normalization = np.mean(scales)  # mean length of coils
+
+        super().build(use_jit=use_jit, verbose=verbose)
+
+    def compute(self, params, constants=None):
+        """Compute minimum/maximum distance between coils and the plasma/surface.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary of coilset degrees of freedom, eg ``CoilSet.params_dict``.
+        constants : dict
+            Dictionary of constant data, eg transforms, profiles etc.
+            Defaults to self._constants.
+
+        Returns
+        -------
+        f : array of floats
+            Minimum distance from coil to points for each coil in the coilset.
+
+        """
+        # coil pts; shape(ncoils,coils_grid.num_nodes,3)
+        coils_pts = constants["coil"]._compute_position(
+            params=params, grid=constants["coil_grid"]
+        )
+
+        points = constants["points"]
+
+        def body(k):
+            # dist btwn all pts; shape(ncoils,npoints,coil_grid.num_nodes)
+            dist = safenorm(coils_pts[k][None, :, :] - points[:, None, :], axis=-1)
+            if self._use_softmin:
+                min = softmin(dist, self._softmin_alpha)
+            else:
+                min = jnp.min(dist)
+
+            return min
+
+        k = jnp.arange(self.dim_f)
+
+        min_dist_per_coil = vmap_chunked(body, chunk_size=self._dist_chunk_size)(k)
+
+        return min_dist_per_coil
+
+
 class PlasmaCoilSetDistanceBound(_Objective):
     """Target the distance between the plasma and coilset.
 
