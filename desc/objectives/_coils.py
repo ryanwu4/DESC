@@ -1163,6 +1163,173 @@ class CoilSetMaxB(_Objective):
         return max_field_per_coil
 
 
+class CoilSetCurrentLengthField(CoilSetMaxB):
+    """Target the product of length, current, and maximum field for each coil.
+
+    This objective is useful as a proxy for HTS tape usage in field.
+    Self field on the coil is computed with the finite build method, and field from
+    other coils on the coil is computed with the filamentary method.
+    Will yield one value for each unique coil in the coilset. Options for magnetic
+    field are magnitude or components projected in the coil frame. All coils in the
+    coilset must inherit from AbstractFiniteBuildCoil.
+
+    Parameters
+    ----------
+    coil : CoilSet
+        Coil(s) that are to be optimized.
+    field : MagneticField, optional
+        External field to be added to the coil field. Defaults to None.
+    component :  {'mag', 't', 'p', 'q'}, optional
+        Component of magnetic field to be targeted. Can be 'mag' for field magnitude,
+        or 't', 'p', 'q' for the respective dimensions of the conductor cross section.
+        Default is 'mag'.
+    xsection_grid : Grid, list, optional
+        Collocation grid used to discretize each coil cross section. Defaults to the
+        default grid for the given coil-type, see ``coils.py`` for more details.
+        If a list, must have the same structure as coils.
+    centerline_grid : Grid, list, optional
+        Collocation grid used to discretize each coil centerline. Defaults to the
+        default grid for the given coil-type, see ``coils.py`` and ``curve.py``
+        for more details. If a list, must have the same structure as coils.
+    field_grid : Grid, list , optional
+        Collocation grid used to discretize the external field component. If a list,
+        must have the same structure as the field.
+    use_softmax: bool, optional
+        Use softmax or hard max. Softmax is a smooth approximation to the actual maximum
+        field that may give smoother gradients, at the expense of being slightly more
+        expensive and only an approximate maximum.
+    softmax_alpha: float, optional
+        Parameter used for softmax. The larger ``softmax_alpha``, the closer the
+        softmax approximates the hardmax. softmax -> hardmax as
+        ``softmax_alpha`` -> infinity.
+    bs_chunk_size : int or None
+        Size to split Biot-Savart computation into chunks of evaluation points.
+        If no chunking should be done or the chunk size is the full input
+        then supply ``None``.
+
+    """
+
+    __doc__ = __doc__.rstrip() + collect_docs(
+        target_default="``target=0``.",
+        bounds_default="``target=0``.",
+        coil=True,
+    )
+
+    _scalar = False
+    _units = "(A*m*T)"
+    _print_value_fmt = "Coil current-length-field: "
+
+    def __init__(
+        self,
+        coil,
+        target=None,
+        bounds=None,
+        weight=1,
+        normalize=True,
+        normalize_target=True,
+        loss_function=None,
+        deriv_mode="auto",
+        field=None,
+        component="mag",
+        xsection_grid=None,
+        centerline_grid=None,
+        field_grid=None,
+        name="coil current length field",
+        jac_chunk_size=None,
+        use_softmax=False,
+        softmax_alpha=1.0,
+        bs_chunk_size=None,
+    ):
+
+        if target is None and bounds is None:
+            target = 0
+
+        super().__init__(
+            coil,
+            target=target,
+            bounds=bounds,
+            weight=weight,
+            normalize=normalize,
+            normalize_target=normalize_target,
+            loss_function=loss_function,
+            deriv_mode=deriv_mode,
+            field=field,
+            component=component,
+            xsection_grid=xsection_grid,
+            centerline_grid=centerline_grid,
+            field_grid=field_grid,
+            name=name,
+            jac_chunk_size=jac_chunk_size,
+            use_softmax=use_softmax,
+            softmax_alpha=softmax_alpha,
+            bs_chunk_size=bs_chunk_size,
+        )
+
+    def build(self, use_jit=True, verbose=1):
+        """Build constant arrays.
+
+        Parameters
+        ----------
+        use_jit : bool, optional
+            Whether to just-in-time compile the objective and derivatives.
+        verbose : int, optional
+            Level of output.
+
+        """
+        super().build(use_jit=use_jit, verbose=verbose)
+
+        coilset = self.things[0]
+
+        self._dim_f = coilset.num_coils
+        self._constants["quad_weights"] = 1
+
+        if self._normalize:
+            coils = tree_leaves(coilset, is_leaf=lambda x: not hasattr(x, "__len__"))
+            field_scales = [compute_scaling_factors(coil)["B"] for coil in coils]
+            mean_field = np.mean(field_scales)  # mean centerline field strength
+
+            length_scales = [compute_scaling_factors(coil)["a"] for coil in coils]
+            mean_length = np.mean(length_scales)
+
+            params = tree_leaves(
+                self.things[0].params_dict, is_leaf=lambda x: isinstance(x, dict)
+            )
+            mean_current = np.mean([np.abs(param["current"]) for param in params])
+            mean_current = np.max((mean_current, 1))
+            self._normalization = mean_current * mean_length * mean_field
+
+        _Objective.build(self, use_jit=use_jit, verbose=verbose)
+
+    def compute(self, params, constants=None):
+        """Compute maximum field on each coil in predefined component.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary of coilset degrees of freedom, eg CoilSet.params_dict
+        constants : dict
+            Dictionary of constant data, eg transforms, profiles etc.
+            Defaults to self._constants.
+
+        Returns
+        -------
+        f : array of floats
+            Maximum field on coil for each coil in the coilset.
+
+        """
+        fields = super().compute(params, constants=constants)
+
+        data = constants["coilset"].compute(["length"], params=params)
+        data = tree_leaves(data, is_leaf=lambda x: isinstance(x, dict))
+        lengths = jnp.array([dat["length"] for dat in data])
+
+        params = tree_leaves(params, is_leaf=lambda x: isinstance(x, dict))
+        currents = jnp.concatenate([param["current"] for param in params])
+        out = jnp.atleast_1d(lengths * currents * fields)
+
+        return out
+
+
 class MinCoilSetPointDistance(_Objective):
     """Target the distance between the plasma and a given set of points.
 
