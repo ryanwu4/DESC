@@ -933,6 +933,9 @@ class CoilSetMaxB(_Objective):
         Collocation grid used to discretize each coil centerline. Defaults to the
         default grid for the given coil-type, see ``coils.py`` and ``curve.py``
         for more details. If a list, must have the same structure as coils.
+    field_grid : Grid, list , optional
+        Collocation grid used to discretize the external field component. If a list,
+        must have the same structure as the field.
     use_softmax: bool, optional
         Use softmax or hard max. Softmax is a smooth approximation to the actual maximum
         field that may give smoother gradients, at the expense of being slightly more
@@ -972,6 +975,7 @@ class CoilSetMaxB(_Objective):
         component="mag",
         xsection_grid=None,
         centerline_grid=None,
+        field_grid=None,
         name="field on coil",
         jac_chunk_size=None,
         use_softmax=False,
@@ -985,6 +989,7 @@ class CoilSetMaxB(_Objective):
 
         self._xsection_grid = xsection_grid
         self._centerline_grid = centerline_grid
+        self._field_grid = field_grid
         self._use_softmax = use_softmax
         self._softmax_alpha = softmax_alpha
         self._has_field = field is not None
@@ -1047,6 +1052,7 @@ class CoilSetMaxB(_Objective):
             "coilset": coilset,
             "finite_build_grid": finite_build_grid,
             "centerline_grid": self._centerline_grid,
+            "field_grid": self._field_grid,
             "quad_weights": 1.0,
         }
 
@@ -1117,7 +1123,7 @@ class CoilSetMaxB(_Objective):
                 other_field += constants["field"].compute_magnetic_field(
                     quad_points,
                     basis="xyz",
-                    source_grid=constants["centerline_grid"],
+                    source_grid=constants["field_grid"],
                     chunk_size=self._bs_chunk_size,
                 )
 
